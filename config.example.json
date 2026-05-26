@@ -1,0 +1,8 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "request_token": "",
+  "timeout_seconds": 8,
+  "webhook_url": "",
+  "secret": ""
+}

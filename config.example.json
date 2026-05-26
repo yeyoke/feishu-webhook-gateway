@@ -1,6 +1,6 @@
 {
   "host": "0.0.0.0",
-  "port": 8080,
+  "port": 8008,
   "request_token": "",
   "timeout_seconds": 8,
   "webhook_url": "",

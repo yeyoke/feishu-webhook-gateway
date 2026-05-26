@@ -22,7 +22,7 @@ python app.py -c config.example.json
 健康检查：
 
 ```bash
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8008/healthz
 ```
 
 ## Jenkins 调用方式
@@ -51,7 +51,7 @@ pipeline {
 
         httpRequest(
           httpMode: 'POST',
-          url: 'http://webhook-gateway.example.com:8080/notify',
+          url: 'http://webhook-gateway.example.com:8008/notify',
           customHeaders: [[name: 'Authorization', value: 'Bearer change-me']],
           contentType: 'APPLICATION_JSON',
           requestBody: payload,
@@ -67,7 +67,7 @@ pipeline {
 
 ```groovy
 bat '''
-curl -X POST http://webhook-gateway.example.com:8080/notify ^
+curl -X POST http://webhook-gateway.example.com:8008/notify ^
   -H "Authorization: Bearer change-me" ^
   -H "Content-Type: application/json" ^
   -d "{\\"title\\":\\"发版通知\\",\\"project\\":\\"%JOB_NAME%\\",\\"status\\":\\"%BUILD_STATUS%\\",\\"build_url\\":\\"%BUILD_URL%\\"}"

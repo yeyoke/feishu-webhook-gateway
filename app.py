@@ -60,7 +60,7 @@ def load_config(path: str | None = None) -> AppConfig:
             file_config = json.load(f)
 
     host = str(file_config.get("host") or _env("HOST", "0.0.0.0"))
-    port = int(file_config.get("port") or _env("PORT", "8080"))
+    port = int(file_config.get("port") or _env("PORT", "8008"))
     request_token = file_config.get("request_token") or _env("GATEWAY_TOKEN")
     timeout_seconds = float(file_config.get("timeout_seconds") or _env("TIMEOUT_SECONDS", "8"))
 

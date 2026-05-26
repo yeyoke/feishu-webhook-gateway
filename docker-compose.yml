@@ -5,19 +5,19 @@ services:
     container_name: webhook-gateway
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8008:8008"
     environment:
       FEISHU_WEBHOOK_URL: "${FEISHU_WEBHOOK_URL}"
       FEISHU_SECRET: "${FEISHU_SECRET:-}"
       GATEWAY_TOKEN: "${GATEWAY_TOKEN:-change-me}"
       HOST: "0.0.0.0"
-      PORT: "8080"
+      PORT: "8008"
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/healthz', timeout=3).read()"
       interval: 30s
       timeout: 5s
       retries: 3

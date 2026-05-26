@@ -8,7 +8,7 @@ RUN useradd --create-home --shell /usr/sbin/nologin appuser
 
 COPY app.py /app/app.py
 
-EXPOSE 8080
+EXPOSE 8008
 
 USER appuser
 

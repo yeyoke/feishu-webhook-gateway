@@ -1,6 +1,6 @@
-# Jenkins 飞书 Webhook 网关
+# Jenkins / Prometheus Alertmanager 飞书 Webhook 网关
 
-这是一个轻量 Python 服务，用来接收 Jenkins Pipeline 的发版通知，并转换成飞书自定义机器人支持的消息格式后发送到群 webhook。
+这是一个轻量 Python 服务，用来接收 Jenkins Pipeline 的发版通知或 Prometheus Alertmanager 的 webhook 告警，并转换成飞书自定义机器人支持的消息格式后发送到群 webhook。
 
 ## 启动
 
@@ -82,6 +82,37 @@ curl -X POST http://webhook-gateway.example.com:8008/notify ^
 | --- | --- |
 | `title` | 消息标题 |
 | `project` | Jenkins 项目名 |
+
+## Prometheus Alertmanager 调用方式
+
+Alertmanager 使用标准 webhook receiver 指向网关即可。网关会自动识别包含 `alerts` 数组的 Alertmanager payload，并转换为飞书交互式卡片。
+
+```yaml
+receivers:
+  - name: feishu-webhook
+    webhook_configs:
+      - url: http://webhook-gateway.example.com:8008/notify
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: change-me
+```
+
+飞书卡片会展示：
+
+| 内容 | 来源字段 |
+| --- | --- |
+| 告警状态 | `status` / `alerts[].status` |
+| 告警名称 | `commonLabels.alertname` / `groupLabels.alertname` |
+| 告警级别 | `commonLabels.severity` |
+| 实例或任务 | `commonLabels.instance` / `commonLabels.job` |
+| 摘要 | `commonAnnotations.summary` / `commonAnnotations.description` |
+| 分组标签 | `groupLabels` |
+| 单条告警详情 | `alerts[].labels`、`alerts[].annotations`、`startsAt`、`endsAt`、`generatorURL` |
+| Alertmanager 链接 | `externalURL` |
+
+`firing` 告警会使用红色卡片，`resolved` 告警会使用绿色卡片。单次最多展开展示 8 条告警，超过的数量会在卡片底部提示。
 
 ## 安全配置
 

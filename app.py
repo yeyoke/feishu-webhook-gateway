@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Feishu webhook gateway for Jenkins release notifications.
+Feishu webhook gateway for Jenkins and Prometheus Alertmanager notifications.
 
-The service accepts a simple Jenkins-friendly JSON payload and forwards a
-formatted Feishu custom bot message to one or more Feishu group webhooks.
+The service accepts a simple Jenkins-friendly JSON payload or a Prometheus
+Alertmanager webhook payload and forwards a formatted Feishu custom bot message
+to a Feishu group webhook.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ LOG = logging.getLogger("feishu-webhook-gateway")
 
 SUCCESS_STATES = {"success", "succeeded", "ok", "pass", "passed", "stable"}
 FAILED_STATES = {"failure", "failed", "error", "unstable", "aborted"}
+ALERTMANAGER_FIRING_STATES = {"firing"}
+ALERTMANAGER_RESOLVED_STATES = {"resolved"}
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,24 @@ def status_icon(status: str) -> str:
     return "⚠️"
 
 
+def alert_status_template(status: str) -> str:
+    lowered = status.lower()
+    if lowered in ALERTMANAGER_FIRING_STATES:
+        return "red"
+    if lowered in ALERTMANAGER_RESOLVED_STATES:
+        return "green"
+    return "orange"
+
+
+def alert_status_icon(status: str) -> str:
+    lowered = status.lower()
+    if lowered in ALERTMANAGER_FIRING_STATES:
+        return "🚨"
+    if lowered in ALERTMANAGER_RESOLVED_STATES:
+        return "✅"
+    return "⚠️"
+
+
 def field(payload: dict[str, Any], *names: str, default: str = "-") -> str:
     for name in names:
         value = payload.get(name)
@@ -115,7 +136,58 @@ def field(payload: dict[str, Any], *names: str, default: str = "-") -> str:
     return default
 
 
+def div_text_element(content: str) -> dict[str, Any]:
+    return {"tag": "div", "text": {"tag": "lark_md", "content": content}}
+
+
+def note_element(content: str) -> dict[str, Any]:
+    return {"tag": "note", "elements": [{"tag": "plain_text", "content": content}]}
+
+
+def hr_element() -> dict[str, Any]:
+    return {"tag": "hr"}
+
+
+def feishu_text(value: Any, default: str = "-") -> str:
+    text = str(value if value not in (None, "") else default)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def labels_to_text(labels: dict[str, Any], skip: set[str] | None = None) -> str:
+    skip = skip or set()
+    parts = []
+    for key in sorted(labels):
+        if key in skip:
+            continue
+        value = labels.get(key)
+        if value not in (None, ""):
+            parts.append(f"`{key}`={feishu_text(value)}")
+    return "  ".join(parts) if parts else "-"
+
+
+def first_present(*values: Any, default: str = "-") -> str:
+    for value in values:
+        if value not in (None, ""):
+            return feishu_text(value)
+    return default
+
+
+def is_alertmanager_payload(payload: dict[str, Any]) -> bool:
+    alerts = payload.get("alerts")
+    return isinstance(alerts, list) and (
+        "groupLabels" in payload
+        or "commonLabels" in payload
+        or any(isinstance(alert, dict) and "labels" in alert for alert in alerts)
+    )
+
+
 def build_feishu_message(payload: dict[str, Any]) -> dict[str, Any]:
+    if is_alertmanager_payload(payload):
+        return build_alertmanager_feishu_message(payload)
+    return build_jenkins_feishu_message(payload)
+
+
+def build_jenkins_feishu_message(payload: dict[str, Any]) -> dict[str, Any]:
     title = str(payload.get("title") or "发版通知")
     project = str(payload.get("project") or "Jenkins")
     card_title = f"{title} - {project}"
@@ -138,6 +210,104 @@ def build_feishu_message(payload: dict[str, Any]) -> dict[str, Any]:
                 "title": {"tag": "plain_text", "content": card_title},
             },
             "elements": [],
+        },
+    }
+
+
+def build_alertmanager_feishu_message(payload: dict[str, Any]) -> dict[str, Any]:
+    alerts = [alert for alert in payload.get("alerts", []) if isinstance(alert, dict)]
+    status = normalize_status(payload.get("status") or first_present(*(alert.get("status") for alert in alerts)))
+    common_labels = payload.get("commonLabels") if isinstance(payload.get("commonLabels"), dict) else {}
+    group_labels = payload.get("groupLabels") if isinstance(payload.get("groupLabels"), dict) else {}
+    common_annotations = (
+        payload.get("commonAnnotations") if isinstance(payload.get("commonAnnotations"), dict) else {}
+    )
+
+    alert_name = first_present(
+        common_labels.get("alertname"),
+        group_labels.get("alertname"),
+        default="Prometheus 告警",
+    )
+    severity = first_present(common_labels.get("severity"), default="-")
+    instance = first_present(common_labels.get("instance"), common_labels.get("job"), default="-")
+    summary = first_present(
+        common_annotations.get("summary"),
+        common_annotations.get("description"),
+        default="",
+    )
+
+    title = f"{alert_status_icon(status)} [{status.upper()}] {alert_name}"
+    if len(alerts) > 1:
+        title = f"{title} x{len(alerts)}"
+
+    elements: list[dict[str, Any]] = [
+        div_text_element(
+            "\n".join(
+                [
+                    f"**告警名称：** {alert_name}",
+                    f"**状态：** {status}",
+                    f"**级别：** {severity}",
+                    f"**实例/任务：** {instance}",
+                ]
+            )
+        )
+    ]
+
+    if summary:
+        elements.append(div_text_element(f"**摘要：** {summary}"))
+
+    if group_labels:
+        elements.append(div_text_element(f"**分组标签：** {labels_to_text(group_labels)}"))
+
+    max_alerts = 8
+    for index, alert in enumerate(alerts[:max_alerts], start=1):
+        labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
+        annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
+        alert_status = normalize_status(alert.get("status") or status)
+        alert_summary = first_present(
+            annotations.get("summary"),
+            annotations.get("description"),
+            labels.get("alertname"),
+            default=f"告警 {index}",
+        )
+
+        detail_lines = [
+            f"**#{index} {alert_summary}**",
+            f"状态：{alert_status}",
+            f"开始：{first_present(alert.get('startsAt'), default='-')}",
+        ]
+        if alert_status.lower() in ALERTMANAGER_RESOLVED_STATES or alert.get("endsAt"):
+            detail_lines.append(f"结束：{first_present(alert.get('endsAt'), default='-')}")
+        detail_lines.append(f"标签：{labels_to_text(labels, skip={'alertname'})}")
+
+        generator_url = alert.get("generatorURL")
+        if generator_url:
+            detail_lines.append(f"[查看 Prometheus 详情]({feishu_text(generator_url)})")
+
+        elements.append(hr_element())
+        elements.append(div_text_element("\n".join(detail_lines)))
+
+    remaining = len(alerts) - max_alerts
+    if remaining > 0:
+        elements.append(note_element(f"还有 {remaining} 条告警未展示，请在 Alertmanager 中查看完整列表。"))
+
+    external_url = payload.get("externalURL")
+    if external_url:
+        elements.append(hr_element())
+        elements.append(div_text_element(f"[打开 Alertmanager]({feishu_text(external_url)})"))
+
+    if payload.get("truncatedAlerts"):
+        elements.append(note_element(f"Alertmanager 已截断 {payload.get('truncatedAlerts')} 条告警。"))
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": alert_status_template(status),
+                "title": {"tag": "plain_text", "content": title},
+            },
+            "elements": elements,
         },
     }
 
@@ -246,7 +416,7 @@ class GatewayServer(ThreadingHTTPServer):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Jenkins to Feishu webhook gateway")
+    parser = argparse.ArgumentParser(description="Jenkins/Alertmanager to Feishu webhook gateway")
     parser.add_argument("-c", "--config", help="Path to JSON config file")
     parser.add_argument("--log-level", default=_env("LOG_LEVEL", "INFO"))
     return parser.parse_args()

@@ -165,11 +165,29 @@ def labels_to_text(labels: dict[str, Any], skip: set[str] | None = None) -> str:
     return "  ".join(parts) if parts else "-"
 
 
+def useful_labels_to_text(labels: dict[str, Any], skip: set[str] | None = None) -> str:
+    text = labels_to_text(labels, skip=skip)
+    return "" if text == "-" else text
+
+
 def first_present(*values: Any, default: str = "-") -> str:
     for value in values:
         if value not in (None, ""):
             return feishu_text(value)
     return default
+
+
+def is_open_ended_alert_time(value: Any) -> bool:
+    text = feishu_text(value, default="")
+    return not text or text == "-" or text.startswith("0001-01-01T00:00:00")
+
+
+def clean_alert_text(value: Any, instance: str = "") -> str:
+    text = feishu_text(value, default="")
+    if instance and instance != "-":
+        text = text.replace(f" (instance {instance})", "")
+        text = text.replace(f"(instance {instance})", "")
+    return text.strip()
 
 
 def is_alertmanager_payload(payload: dict[str, Any]) -> bool:
@@ -230,61 +248,75 @@ def build_alertmanager_feishu_message(payload: dict[str, Any]) -> dict[str, Any]
     )
     severity = first_present(common_labels.get("severity"), default="-")
     instance = first_present(common_labels.get("instance"), common_labels.get("job"), default="-")
-    summary = first_present(
-        common_annotations.get("summary"),
-        common_annotations.get("description"),
-        default="",
+    summary = clean_alert_text(
+        first_present(
+            common_annotations.get("summary"),
+            common_annotations.get("description"),
+            default="",
+        ),
+        instance,
     )
 
     title = f"{alert_status_icon(status)} [{status.upper()}] {alert_name}"
     if len(alerts) > 1:
         title = f"{title} x{len(alerts)}"
 
-    elements: list[dict[str, Any]] = [
-        div_text_element(
-            "\n".join(
-                [
-                    f"**告警名称：** {alert_name}",
-                    f"**状态：** {status}",
-                    f"**级别：** {severity}",
-                    f"**实例/任务：** {instance}",
-                ]
-            )
-        )
+    overview_lines = [
+        f"**告警：** {alert_name}",
+        f"**级别：** {severity}",
+        f"**状态：** {status}",
     ]
-
+    if instance != "-":
+        overview_lines.append(f"**影响对象：** {instance}")
     if summary:
-        elements.append(div_text_element(f"**摘要：** {summary}"))
+        overview_lines.append(f"**说明：** {summary}")
 
-    if group_labels:
-        elements.append(div_text_element(f"**分组标签：** {labels_to_text(group_labels)}"))
+    elements: list[dict[str, Any]] = [div_text_element("\n".join(overview_lines))]
+
+    group_label_text = useful_labels_to_text(group_labels, skip={"alertname"})
+    if group_label_text:
+        elements.append(div_text_element(f"**分组：** {group_label_text}"))
 
     max_alerts = 8
     for index, alert in enumerate(alerts[:max_alerts], start=1):
         labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
         annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
         alert_status = normalize_status(alert.get("status") or status)
-        alert_summary = first_present(
-            annotations.get("summary"),
-            annotations.get("description"),
-            labels.get("alertname"),
-            default=f"告警 {index}",
+        alert_instance = first_present(labels.get("instance"), labels.get("job"), default=instance)
+        alert_summary = clean_alert_text(
+            first_present(
+                annotations.get("summary"),
+                annotations.get("description"),
+                labels.get("alertname"),
+                default=f"告警 {index}",
+            ),
+            alert_instance,
         )
 
-        detail_lines = [
-            f"**#{index} {alert_summary}**",
-            f"状态：{alert_status}",
-            f"开始：{first_present(alert.get('startsAt'), default='-')}",
-        ]
-        if alert_status.lower() in ALERTMANAGER_RESOLVED_STATES or alert.get("endsAt"):
+        detail_lines: list[str] = []
+        if len(alerts) > 1:
+            detail_lines.append(f"**#{index} {labels.get('alertname') or alert_name}**")
+            if alert_summary and alert_summary != alert_name:
+                detail_lines.append(f"说明：{alert_summary}")
+            if alert_status != status:
+                detail_lines.append(f"状态：{alert_status}")
+            if alert_instance != "-" and alert_instance != instance:
+                detail_lines.append(f"影响对象：{alert_instance}")
+
+        detail_lines.append(f"开始：{first_present(alert.get('startsAt'), default='-')}")
+        if not is_open_ended_alert_time(alert.get("endsAt")):
             detail_lines.append(f"结束：{first_present(alert.get('endsAt'), default='-')}")
-        detail_lines.append(f"标签：{labels_to_text(labels, skip={'alertname'})}")
+
+        label_text = useful_labels_to_text(labels, skip={"alertname", "severity", "instance"})
+        if label_text:
+            detail_lines.append(f"标签：{label_text}")
 
         generator_url = alert.get("generatorURL")
         if generator_url:
             detail_lines.append(f"[查看 Prometheus 详情]({feishu_text(generator_url)})")
 
-        elements.append(hr_element())
+        if index == 1 or len(alerts) > 1:
+            elements.append(hr_element())
         elements.append(div_text_element("\n".join(detail_lines)))
 
     remaining = len(alerts) - max_alerts

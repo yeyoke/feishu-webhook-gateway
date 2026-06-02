@@ -311,10 +311,6 @@ def build_alertmanager_feishu_message(payload: dict[str, Any]) -> dict[str, Any]
         if label_text:
             detail_lines.append(f"标签：{label_text}")
 
-        generator_url = alert.get("generatorURL")
-        if generator_url:
-            detail_lines.append(f"[查看 Prometheus 详情]({feishu_text(generator_url)})")
-
         if index == 1 or len(alerts) > 1:
             elements.append(hr_element())
         elements.append(div_text_element("\n".join(detail_lines)))
@@ -322,11 +318,6 @@ def build_alertmanager_feishu_message(payload: dict[str, Any]) -> dict[str, Any]
     remaining = len(alerts) - max_alerts
     if remaining > 0:
         elements.append(note_element(f"还有 {remaining} 条告警未展示，请在 Alertmanager 中查看完整列表。"))
-
-    external_url = payload.get("externalURL")
-    if external_url:
-        elements.append(hr_element())
-        elements.append(div_text_element(f"[打开 Alertmanager]({feishu_text(external_url)})"))
 
     if payload.get("truncatedAlerts"):
         elements.append(note_element(f"Alertmanager 已截断 {payload.get('truncatedAlerts')} 条告警。"))

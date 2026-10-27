@@ -360,6 +360,18 @@ def post_to_feishu(target: Target, message: dict[str, Any], timeout: float) -> d
         with urllib.request.urlopen(request, timeout=timeout) as response:
             response_body = response.read().decode("utf-8")
             parsed = json.loads(response_body) if response_body else {}
+            if not isinstance(parsed, dict):
+                raise RuntimeError("Feishu webhook returned an invalid response")
+
+            # V2 custom bots return `code`; older webhook responses may use
+            # `StatusCode`. HTTP 200 alone does not mean the message was sent.
+            result_codes = [parsed[key] for key in ("code", "StatusCode") if key in parsed]
+            if not result_codes or any(str(code) != "0" for code in result_codes):
+                error_code = ", ".join(str(code) for code in result_codes) or "missing"
+                error_message = parsed.get("msg") or parsed.get("StatusMessage") or "unknown error"
+                raise RuntimeError(
+                    f"Feishu webhook rejected the message (code {error_code}): {error_message}"
+                )
             return {"status_code": response.status, "body": parsed}
     except urllib.error.HTTPError as exc:
         response_body = exc.read().decode("utf-8", errors="replace")
